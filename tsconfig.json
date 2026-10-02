@@ -16,7 +16,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "customConditions": ["@liquid/source"]
+    "customConditions": ["@liquidau/source"]
   },
   "include": ["src", "test"]
 }

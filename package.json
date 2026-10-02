@@ -1,5 +1,5 @@
 {
-  "name": "@liquid/solvers",
+  "name": "@liquidau/solvers",
   "version": "0.2.0",
   "private": true,
   "license": "MIT",
@@ -19,7 +19,7 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "@liquid/source": "./src/index.ts",
+      "@liquidau/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -33,7 +33,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
-    "test": "node --import tsx --conditions=@liquid/source --test test/*.test.ts",
+    "test": "node --import tsx --conditions=@liquidau/source --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,4 +1,4 @@
-# @liquid/solvers
+# @liquidau/solvers
 
 Exact solvers for small, dense binary classification problems (such as heads on top of text
 embeddings), in TypeScript and **verified against scikit-learn**, plus the metrics you need to
@@ -16,7 +16,7 @@ calibrate and evaluate them. One runtime dependency: [`ml-matrix`](https://githu
 | `binomialCdf`, `clopperPearsonUpper` | Exact binomial CDF and one-sided Clopper-Pearson upper bound | |
 
 ```ts
-import { fitLogistic, decisionFunction, fitPlatt, predictPlatt, prevalenceWeights } from '@liquid/solvers';
+import { fitLogistic, decisionFunction, fitPlatt, predictPlatt, prevalenceWeights } from '@liquidau/solvers';
 
 const model = fitLogistic(Xtrain, ytrain, { C: 1, classWeight: 'balanced' });
 const logits = Xcal.map((x) => decisionFunction(model, x));
