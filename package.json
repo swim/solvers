@@ -11,6 +11,14 @@
     "scikit-learn",
     "machine-learning"
   ],
+  "homepage": "https://github.com/swim/solvers#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swim/solvers.git"
+  },
+  "bugs": {
+    "url": "https://github.com/swim/solvers/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -42,5 +50,8 @@
     "@types/node": "^20.19.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "restricted"
   }
 }
