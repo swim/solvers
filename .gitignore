@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Python environments for regenerating the golden fixture
+sklearn-env/
+.venv/
+__pycache__/
+
+# Build output (rebuilt by the prepack script on publish)
+dist/
+
+# npm pack output and logs
+*.tgz
+npm-debug.log*
+
+# macOS
+.DS_Store

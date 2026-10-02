@@ -1,0 +1,47 @@
+{
+  "name": "@liquid/solvers",
+  "version": "0.2.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Exact, scikit-learn-verified solvers in TypeScript: weighted L2 logistic regression (Newton/IRLS), Platt scaling, weighted isotonic regression, plus calibration and evaluation metrics (Wilson CI, prevalence reweighting, weighted ECE, Cohen's kappa).",
+  "keywords": [
+    "logistic-regression",
+    "calibration",
+    "platt-scaling",
+    "isotonic-regression",
+    "scikit-learn",
+    "machine-learning"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "@liquid/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "test": "node --import tsx --conditions=@liquid/source --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ml-matrix": "^6.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
