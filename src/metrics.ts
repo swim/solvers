@@ -146,3 +146,20 @@ export function clopperPearsonUpper(k: number, n: number, confidence = 0.95): nu
   }
   return hi;
 }
+
+/**
+ * Exact one-sided Clopper-Pearson lower bound: the smallest rate p with P(X >= k | n, p) >= 1 - confidence.
+ * Equal to 1 - clopperPearsonUpper(n - k, n, confidence), but costs O(k) per step instead of O(n).
+ */
+export function clopperPearsonLower(k: number, n: number, confidence = 0.95): number {
+  if (n === 0 || k <= 0) return 0;
+  const alpha = 1 - confidence;
+  let lo = 0;
+  let hi = k / n;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (1 - binomialCdf(k - 1, n, mid) < alpha) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}

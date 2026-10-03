@@ -16,6 +16,9 @@ calibrate and evaluate them. One runtime dependency: [`ml-matrix`](https://githu
 | `binomialCdf`, `clopperPearsonUpper` | Exact binomial CDF and one-sided Clopper-Pearson upper bound | |
 | `conformalLowerThreshold`, `conformalUpperThreshold`, `conformalRank`, `minimumSamples` | Distribution-free thresholds from order statistics: at most a share α of future scores below (or at and above) the threshold, with probability 1 − δ (PAC) or on average (no δ). E.g. a recall threshold from positives' scores, a false-alarm threshold from negatives'. `minimumSamples` is the fewest scores for any guarantee | MAPIE `BinaryClassificationController` (Learn Then Test, fixed sequence) and crepes class-conditional p-values |
 | `nextUp` | The next double above a value, so `score >= nextUp(v)` excludes `v` | |
+| `htTotal`, `stratifiedRatio`, `stratifiedBootstrap`, `kishEffectiveN`, `weightedQuantile` | Design-based estimation for stratified simple random samples: Horvitz–Thompson totals, ratios with linearised variance and finite-population correction, Rao–Wu bootstrap replicate weights, Kish effective size, weighted quantiles | samplics `TaylorEstimator` (totals, ratios, standard errors) |
+| `designRiskThreshold` | A recall threshold from a stratified sample whose miss rate is ≤ α with probability 1 − δ. `exact` (default): per-stratum Clopper–Pearson bounds, valid but conservative with many strata. `linearised` / `bootstrap`: approximate; they under-cover when a heavily weighted stratum yields few sampled positives | |
+| `clopperPearsonLower`, `normalQuantile`, `seededRandom` | Exact binomial lower bound; standard normal quantile; a seeded PRNG | |
 
 ```ts
 import { fitLogistic, decisionFunction, fitPlatt, predictPlatt, prevalenceWeights } from '@liquidau/solvers';
@@ -45,6 +48,14 @@ tolerances are:
 - coefficients: below 1e-6
 - probabilities: below 1e-8
 - isotonic thresholds and predictions: below 1e-12
+
+`test/fixtures/survey-golden.json` (`scripts/make_survey_golden.py`) checks the design-based
+estimators against samplics' `TaylorEstimator`: totals, ratios and their linearised standard errors
+match to 1e-8. Note that samplics' `fpc` argument is the multiplier 1 − n/N, not the sampling
+fraction. `designRiskThreshold`'s coverage is checked by simulation over 500 designs. In a population
+where 13% of positives sit in a low-score stratum that holds 1% of traffic, a 200-item sample of that
+stratum makes `exact` infeasible, which is the honest answer. `linearised` exceeds α in 20% of runs at
+δ = 5%. When that stratum is oversampled, both hold.
 
 `test/fixtures/conformal-golden.json` (`scripts/make_conformal_golden.py`) checks the conformal
 thresholds against MAPIE and crepes. They match exactly, and every MAPIE p-value is reproduced to
@@ -89,9 +100,10 @@ npm run typecheck
 npm run build        # dist/ (ESM + .d.ts)
 
 # Regenerating the golden fixtures needs Python (development only):
-python3 -m venv .venv && .venv/bin/pip install numpy scikit-learn mapie crepes
+python3 -m venv .venv && .venv/bin/pip install numpy scikit-learn mapie crepes samplics
 .venv/bin/python scripts/make_golden.py
 .venv/bin/python scripts/make_conformal_golden.py
+.venv/bin/python scripts/make_survey_golden.py
 ```
 
 ## License
