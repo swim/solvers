@@ -14,6 +14,8 @@ calibrate and evaluate them. One runtime dependency: [`ml-matrix`](https://githu
 | `ece` | Weighted expected calibration error plus a reliability table | numpy `linspace` / `digitize` binning (not `calibration_curve`; see below) |
 | `cohenKappa` | Inter-annotator agreement | `cohen_kappa_score`, except the degenerate case below |
 | `binomialCdf`, `clopperPearsonUpper` | Exact binomial CDF and one-sided Clopper-Pearson upper bound | |
+| `conformalLowerThreshold`, `conformalUpperThreshold`, `conformalRank`, `minimumSamples` | Distribution-free thresholds from order statistics: at most a share α of future scores below (or at and above) the threshold, with probability 1 − δ (PAC) or on average (no δ). E.g. a recall threshold from positives' scores, a false-alarm threshold from negatives'. `minimumSamples` is the fewest scores for any guarantee | MAPIE `BinaryClassificationController` (Learn Then Test, fixed sequence) and crepes class-conditional p-values |
+| `nextUp` | The next double above a value, so `score >= nextUp(v)` excludes `v` | |
 
 ```ts
 import { fitLogistic, decisionFunction, fitPlatt, predictPlatt, prevalenceWeights } from '@liquidau/solvers';
@@ -43,6 +45,13 @@ tolerances are:
 - coefficients: below 1e-6
 - probabilities: below 1e-8
 - isotonic thresholds and predictions: below 1e-12
+
+`test/fixtures/conformal-golden.json` (`scripts/make_conformal_golden.py`) checks the conformal
+thresholds against MAPIE and crepes. They match exactly, and every MAPIE p-value is reproduced to
+1e-8. One known MAPIE difference: its built-in `recall` risk computes 1 − recall in floating point and
+rounds the miss count up, which can count one miss too many (150 × (1 − 149/150) =
+1.0000000000000064). In 3 of the 8 cases it lands one rank stricter than the exact test. The
+fixture therefore states recall as a miss rate, and records the built-in result for comparison.
 
 At 3,000 examples × 512 features, a fit takes about 10 s over 7 or 8 Newton iterations
 (Apple Silicon, Node 20). Almost all of that is forming the Hessian, about 1 s per iteration.
@@ -79,9 +88,10 @@ npm test             # runs the .ts tests through tsx, so Node 20 works
 npm run typecheck
 npm run build        # dist/ (ESM + .d.ts)
 
-# Regenerating the golden fixture needs Python + scikit-learn (development only):
-python3 -m venv .venv && .venv/bin/pip install numpy scikit-learn
+# Regenerating the golden fixtures needs Python (development only):
+python3 -m venv .venv && .venv/bin/pip install numpy scikit-learn mapie crepes
 .venv/bin/python scripts/make_golden.py
+.venv/bin/python scripts/make_conformal_golden.py
 ```
 
 ## License

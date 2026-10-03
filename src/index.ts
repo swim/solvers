@@ -6,3 +6,4 @@ export { fitIsotonic, predictIsotonic } from './isotonic.ts';
 export type { IsotonicModel } from './isotonic.ts';
 export { binomialCdf, clopperPearsonUpper, cohenKappa, ece, prevalenceWeights, wilson } from './metrics.ts';
 export type { ReliabilityRow } from './metrics.ts';
+export { conformalLowerThreshold, conformalRank, conformalUpperThreshold, minimumSamples, nextUp } from './conformal.ts';

@@ -2,13 +2,14 @@
   "name": "@liquidau/solvers",
   "version": "0.2.1",
   "license": "MIT",
-  "description": "Exact, scikit-learn-verified solvers in TypeScript: weighted L2 logistic regression (Newton/IRLS), Platt scaling, weighted isotonic regression, plus calibration and evaluation metrics (Wilson CI, prevalence reweighting, weighted ECE, Cohen's kappa).",
+  "description": "Exact, scikit-learn-verified solvers in TypeScript: weighted L2 logistic regression (Newton/IRLS), Platt scaling, weighted isotonic regression, plus calibration and evaluation metrics (Wilson CI, prevalence reweighting, weighted ECE, Cohen's kappa) and MAPIE/crepes-verified conformal thresholds.",
   "keywords": [
     "logistic-regression",
     "calibration",
     "platt-scaling",
     "isotonic-regression",
     "scikit-learn",
+    "conformal-prediction",
     "machine-learning"
   ],
   "homepage": "https://github.com/swim/solvers#readme",
