@@ -151,6 +151,31 @@ test('designRiskThreshold (linearised): under-covers in that same design - why i
   assert.ok(ok.fails / ok.runs <= 0.05 + slack, 'adequate when every stratum yields enough positives');
 });
 
+test('designRiskThreshold (linearised): thin-strata warnings flag the under-allocated design; failOnThinStrata turns them into infeasibility', () => {
+  const pop = population(60000, 11);
+  const posScores = pop.s.filter((_, i) => pop.y[i] === 1).sort((a, b) => a - b);
+  const trueMiss = (t: number) => posScores.filter((v) => v < t).length / posScores.length;
+  const rand = seededRandom(12);
+  let warned = 0, failsWarned = 0, fails = 0, guardedFails = 0, guardedFeasible = 0;
+  const runs = 300;
+  for (let r = 0; r < runs; r++) {
+    const d = sample(pop, specDesign, rand);
+    const args = { inclusionProbs: d.pis, strata: d.strata, stratumSizes: d.sizes, y: d.idx.map((i) => pop.y[i]), scores: d.idx.map((i) => pop.s[i]), alpha: 0.1, delta: 0.05, method: 'linearised' as const };
+    const res = designRiskThreshold(args);
+    const failed = res.feasible && trueMiss(res.threshold) > 0.1;
+    if (res.warnings?.length) warned++;
+    if (failed) { fails++; if (res.warnings?.length) failsWarned++; }
+    const guarded = designRiskThreshold({ ...args, failOnThinStrata: true });
+    if (guarded.feasible) { guardedFeasible++; if (trueMiss(guarded.threshold) > 0.1) guardedFails++; }
+  }
+  assert.ok(fails > 0.1 * runs, `${fails} failures`);
+  assert.ok(failsWarned >= 0.9 * fails, `the warning fires on ${failsWarned} of ${fails} failing runs`);
+  assert.ok(warned >= 0.9 * runs, 'this design is flagged almost every time');
+  assert.ok(guardedFails / runs <= 0.05 + slack, `failOnThinStrata: ${guardedFails} failures in ${guardedFeasible} feasible runs`);
+  const exact = designRiskThreshold({ inclusionProbs: [0.5, 0.5, 0.5, 0.5], strata: ['a', 'a', 'a', 'a'], stratumSizes: { a: 8 }, y: [1, 1, 0, 0], scores: [0.9, 0.8, 0.1, 0.2], alpha: 0.5, delta: 0.05 });
+  assert.deepEqual(exact.feasible ? exact.warnings : exact.warnings ?? [], [], 'exact needs no warnings');
+});
+
 test('designRiskThreshold: infeasible with too few positives, refuses positives-only input, bootstrap agrees', () => {
   const few = { inclusionProbs: [0.5, 0.5, 0.5, 0.5], strata: ['a', 'a', 'a', 'a'], stratumSizes: { a: 8 }, y: [1, 1, 0, 0], scores: [0.9, 0.8, 0.1, 0.2], alpha: 0.05, delta: 0.05 };
   const res = designRiskThreshold(few);

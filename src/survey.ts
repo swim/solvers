@@ -198,8 +198,8 @@ export function normalQuantile(p: number): number {
 export type DesignRiskMethod = 'exact' | 'linearised' | 'bootstrap';
 
 export type DesignRiskResult =
-  | { feasible: true; threshold: number; missRateEstimate: number; missRateUpper: number; nEff: number; guarantee: 'design-exact' | 'design-approximate'; method: DesignRiskMethod }
-  | { feasible: false; reason: string; nEff: number };
+  | { feasible: true; threshold: number; missRateEstimate: number; missRateUpper: number; nEff: number; guarantee: 'design-exact' | 'design-approximate'; method: DesignRiskMethod; warnings: string[] }
+  | { feasible: false; reason: string; nEff: number; warnings?: string[] };
 
 /**
  * A recall threshold (act at score >= t) from a stratified sample: the highest candidate whose
@@ -227,8 +227,27 @@ export function designRiskThreshold(options: StratifiedDesign & {
   method?: DesignRiskMethod;
   replicates?: number;
   seed?: number;
+  /**
+   * linearised / bootstrap: a sampled (non-census) stratum with fewer calibration positives than
+   * this is "thin". Thin strata whose exact (95%) upper bound on their share of all positives exceeds
+   * exemptShare × α are reported in `warnings` (default 5): that is where these bounds can
+   * under-cover - a heavily weighted stratum holding a real share of positives that the sample
+   * barely saw. Ignored by exact.
+   */
+  minStratumPositives?: number;
+  /** Thin strata that can hide at most exemptShare × α of positives are not reported (default 0.5). */
+  exemptShare?: number;
+  /**
+   * Report infeasible instead of warning about thin strata (default false). In simulation this
+   * removed the under-coverage of a badly allocated design, but on well-allocated designs it blocked
+   * far more valid thresholds than it saved: prefer sizing the sample (designSample's
+   * expected-positives allocation) and reading the warnings.
+   */
+  failOnThinStrata?: boolean;
 }): DesignRiskResult {
-  const { y, scores, alpha, delta, method = 'exact', replicates = 2000, seed = 0 } = options;
+  const { y, scores, alpha, delta, method = 'exact', replicates = 2000, seed = 0, minStratumPositives = method === 'exact' ? 0 : 5, exemptShare = 0.5, failOnThinStrata = false } = options;
+  if (!(exemptShare >= 0)) throw new Error(`exemptShare must be non-negative, got ${exemptShare}`);
+  if (!(Number.isInteger(minStratumPositives) && minStratumPositives >= 0)) throw new Error(`minStratumPositives must be a non-negative integer, got ${minStratumPositives}`);
   if (!(alpha > 0 && alpha < 1)) throw new Error(`alpha must be strictly between 0 and 1, got ${alpha}`);
   if (!(delta > 0 && delta < 1)) throw new Error(`delta must be strictly between 0 and 1, got ${delta}`);
   checkLengths(y.length, { scores });
@@ -244,6 +263,18 @@ export function designRiskThreshold(options: StratifiedDesign & {
   const positives = Array.from(y, (_, i) => i).filter((i) => y[i] === 1).sort((a, b) => scores[a] - scores[b]);
   const nEff = kishEffectiveN(positives.map((i) => w[i]));
   if (positives.length === 0) return { feasible: false, reason: 'no calibration positives', nEff: 0 };
+  const warnings: string[] = [];
+  if (method !== 'exact' && minStratumPositives > 0) {
+    // Estimated positives overall, and an exact upper bound on how many a thin stratum could hold.
+    const positivesTotal = strata.reduce((acc, st) => acc + (st.N / st.idx.length) * st.idx.filter((i) => y[i] === 1).length, 0);
+    const couldHide = (st: Stratum) => (st.N * clopperPearsonUpper(st.idx.filter((i) => y[i] === 1).length, st.idx.length, 0.95)) / positivesTotal;
+    const thin = strata.filter((st) => st.idx.length < st.N && st.idx.filter((i) => y[i] === 1).length < minStratumPositives && couldHide(st) > exemptShare * alpha);
+    if (thin.length) {
+      const what = `${method} bounds can under-cover when a stratum yields few positives: ${thin.map((st) => `${st.name} has ${st.idx.filter((i) => y[i] === 1).length} but could hold ${(100 * couldHide(st)).toFixed(1)}% of positives`).join(', ')} - size the calibration sample so it expects at least ${minStratumPositives} there, or use method 'exact'`;
+      if (failOnThinStrata) return { feasible: false, nEff, reason: what, warnings: [what] };
+      warnings.push(what);
+    }
+  }
   const z = normalQuantile(1 - delta);
   const nFloor = Math.floor(nEff);
 
@@ -312,7 +343,7 @@ export function designRiskThreshold(options: StratifiedDesign & {
     const t = scores[positives[j]];
     const b = bound(); // misses so far are exactly the positives scoring below t
     if (b.upper > alpha) {
-      if (!best) return { feasible: false, reason: `the miss-rate bound is ${b.upper.toFixed(4)} > α = ${alpha} even at the lowest positive score (Kish effective positives ${nEff.toFixed(1)})`, nEff };
+      if (!best) return { feasible: false, reason: `the miss-rate bound is ${b.upper.toFixed(4)} > α = ${alpha} even at the lowest positive score (Kish effective positives ${nEff.toFixed(1)})`, nEff, warnings };
       break;
     }
     best = { t, R: b.R, upper: b.upper };
@@ -324,5 +355,5 @@ export function designRiskThreshold(options: StratifiedDesign & {
       j++;
     }
   }
-  return { feasible: true, threshold: best!.t, missRateEstimate: best!.R, missRateUpper: best!.upper, nEff, guarantee: method === 'exact' ? 'design-exact' : 'design-approximate', method };
+  return { feasible: true, threshold: best!.t, missRateEstimate: best!.R, missRateUpper: best!.upper, nEff, guarantee: method === 'exact' ? 'design-exact' : 'design-approximate', method, warnings };
 }
