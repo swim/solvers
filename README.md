@@ -2,7 +2,7 @@
 
 Exact solvers for small, dense binary classification problems (such as heads on top of text
 embeddings), in TypeScript and **verified against scikit-learn**, plus the metrics you need to
-calibrate and evaluate them. One runtime dependency: [`ml-matrix`](https://github.com/mljs/matrix).
+calibrate and evaluate them. No runtime dependencies.
 
 | Export | What | Matches scikit-learn |
 |---|---|---|
@@ -19,7 +19,7 @@ calibrate and evaluate them. One runtime dependency: [`ml-matrix`](https://githu
 | `htTotal`, `stratifiedRatio`, `stratifiedBootstrap`, `kishEffectiveN`, `weightedQuantile` | Design-based estimation for stratified simple random samples: Horvitz–Thompson totals, ratios with linearised variance and finite-population correction, Rao–Wu bootstrap replicate weights, Kish effective size, weighted quantiles | samplics `TaylorEstimator` (totals, ratios, standard errors) |
 | `designRiskThreshold` | A recall threshold from a stratified sample whose miss rate is ≤ α with probability 1 − δ. `exact` (default): per-stratum Clopper–Pearson bounds, valid but conservative with many strata. `linearised` / `bootstrap`: approximate. They under-cover when a heavily weighted stratum yields few sampled positives, typically because high-score strata were over-sampled to find positives. Such "thin" strata are reported in `warnings`; `failOnThinStrata` turns the warning into infeasibility | |
 | `designPrecisionThreshold` | A precision threshold from a stratified sample: the loosest of a fixed, strictest-first candidate list whose precision lower bound reaches the target. `linearised`, or `exact` (rarely feasible: it must allow for unseen false positives in every stratum) | |
-| `coxTest` | Cox's recalibration test: y ~ a + b·logit p, likelihood-ratio test of a = 0, b = 1 (weights rescaled to their Kish size) | scikit-learn's unpenalised `LogisticRegression` |
+| `coxTest` | Cox's recalibration test: y ~ a + b·logit p, likelihood-ratio test of a = 0, b = 1 (weights rescaled to their Kish size). `converged` is false under separation, when the p-value means nothing | scikit-learn's unpenalised `LogisticRegression` |
 | `exceedanceTest` | Exact binomial test that a live share of scores at or above a threshold exceeds a bound | scipy |
 | `clopperPearsonLower`, `normalQuantile`, `seededRandom` | Exact binomial lower bound; standard normal quantile; a seeded PRNG | |
 
@@ -70,8 +70,9 @@ rounds the miss count up, which can count one miss too many (150 × (1 − 149/1
 1.0000000000000064). In 3 of the 8 cases it lands one rank stricter than the exact test. The
 fixture therefore states recall as a miss rate, and records the built-in result for comparison.
 
-At 3,000 examples × 512 features, a fit takes about 10 s over 7 or 8 Newton iterations
-(Apple Silicon, Node 20). Almost all of that is forming the Hessian, about 1 s per iteration.
+At 3,000 examples × 768 features, a fit takes about 6 s over 7 Newton iterations (Apple Silicon,
+Node 20); at 616 × 768, about 2 s. X is copied once into a contiguous typed array, the Hessian is
+accumulated four samples per pass, and the Cholesky factorisation runs in place.
 
 `classWeight: 'balanced'` uses sample-weighted class totals, as current scikit-learn does.
 

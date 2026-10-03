@@ -24,3 +24,10 @@ test('coxTest validates inputs', () => {
   assert.throws(() => coxTest([0.5], [2]), /0 or 1/);
   assert.throws(() => coxTest([0.5, 0.4], [1]), /same length/);
 });
+
+test('coxTest reports non-convergence under separation', () => {
+  const p = [0.01, 0.02, 0.03, 0.97, 0.98, 0.99];
+  const r = coxTest(p, [0, 0, 0, 1, 1, 1]);
+  assert.equal(r.converged, false, `slope ${r.slope}`);
+  assert.equal(coxTest([0.2, 0.3, 0.6, 0.7, 0.4, 0.5], [0, 1, 0, 1, 1, 0]).converged, true);
+});

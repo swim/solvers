@@ -26,7 +26,12 @@ function prep(p: ArrayLike<number>, y: ArrayLike<number>, w?: ArrayLike<number>)
   return raw.map((v) => v * scale);
 }
 
-export function coxTest(p: ArrayLike<number>, y: ArrayLike<number>, w?: ArrayLike<number>): { intercept: number; slope: number; lr: number; pValue: number } {
+/**
+ * `converged` is false when the fit didn't settle - typically (quasi-)separation, where the scores
+ * split the classes almost perfectly and the maximum-likelihood slope runs off to infinity; the
+ * p-value then means nothing.
+ */
+export function coxTest(p: ArrayLike<number>, y: ArrayLike<number>, w?: ArrayLike<number>): { intercept: number; slope: number; lr: number; pValue: number; converged: boolean } {
   const wt = prep(p, y, w);
   const z = Array.from(p, (v) => Math.log(v / (1 - v)));
   const model = fitLogistic(z.map((v) => [v]), Array.from(y), { C: 1e10, sampleWeight: wt, tol: 1e-14, maxIter: 200 });
@@ -41,6 +46,6 @@ export function coxTest(p: ArrayLike<number>, y: ArrayLike<number>, w?: ArrayLik
     return s;
   };
   const lr = Math.max(0, 2 * (ll(model.intercept, model.coef[0]) - ll(0, 1)));
-  return { intercept: model.intercept, slope: model.coef[0], lr, pValue: Math.exp(-lr / 2) };
+  return { intercept: model.intercept, slope: model.coef[0], lr, pValue: Math.exp(-lr / 2), converged: model.converged };
 }
 

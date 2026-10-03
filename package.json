@@ -44,9 +44,6 @@
     "test": "node --import tsx --conditions=@liquidau/source --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "ml-matrix": "^6.15.0"
-  },
   "devDependencies": {
     "@types/node": "^20.19.0",
     "tsx": "^4.23.15",
