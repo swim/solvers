@@ -1,123 +1,79 @@
 # @liquidau/solvers
 
-Exact solvers for small, dense binary classification problems (such as heads on top of text
-embeddings), in TypeScript and **verified against scikit-learn**, plus the metrics you need to
-calibrate and evaluate them. No runtime dependencies.
+Exact, dependency-free statistics for binary classifiers in TypeScript, checked against
+scikit-learn, MAPIE, crepes, samplics and scipy.
 
-| Export | What | Matches scikit-learn |
-|---|---|---|
-| `fitLogistic`, `decisionFunction`, `sigmoid`, `effectiveWeights` | Binary logistic regression, L2, per-sample weights, `classWeight: 'balanced'`. Damped Newton (IRLS) with a Cholesky solve | `LogisticRegression(penalty="l2")`: same objective, same optimum |
-| `fitPlatt`, `predictPlatt` | Platt scaling: a weighted logistic regression on the classifier's logit | `LogisticRegression(C=1e6)` on the logit (not `CalibratedClassifierCV`; see below) |
-| `fitIsotonic`, `predictIsotonic` | Weighted, non-decreasing isotonic regression, ported step for step | `IsotonicRegression(out_of_bounds="clip", y_min, y_max)` |
-| `wilson` | Wilson score interval for a proportion | |
-| `prevalenceWeights` | Reweights an enriched sample so positives carry a target prevalence | |
-| `ece` | Weighted expected calibration error plus a reliability table | numpy `linspace` / `digitize` binning (not `calibration_curve`; see below) |
-| `cohenKappa` | Inter-annotator agreement | `cohen_kappa_score`, except the degenerate case below |
-| `binomialCdf`, `clopperPearsonUpper` | Exact binomial CDF and one-sided Clopper-Pearson upper bound | |
-| `conformalLowerThreshold`, `conformalUpperThreshold`, `conformalRank`, `minimumSamples` | Distribution-free thresholds from order statistics: at most a share α of future scores below (or at and above) the threshold, with probability 1 − δ (PAC) or on average (no δ). E.g. a recall threshold from positives' scores, a false-alarm threshold from negatives'. `minimumSamples` is the fewest scores for any guarantee | MAPIE `BinaryClassificationController` (Learn Then Test, fixed sequence) and crepes class-conditional p-values |
-| `nextUp` | The next double above a value, so `score >= nextUp(v)` excludes `v` | |
-| `htTotal`, `stratifiedRatio`, `stratifiedBootstrap`, `kishEffectiveN`, `weightedQuantile` | Design-based estimation for stratified simple random samples: Horvitz–Thompson totals, ratios with linearised variance and finite-population correction, Rao–Wu bootstrap replicate weights, Kish effective size, weighted quantiles | samplics `TaylorEstimator` (totals, ratios, standard errors) |
-| `designRiskThreshold` | A recall threshold from a stratified sample whose miss rate is ≤ α with probability 1 − δ. `exact` (default): per-stratum Clopper–Pearson bounds, valid but conservative with many strata. `linearised` / `bootstrap`: approximate. They under-cover when a heavily weighted stratum yields few sampled positives, typically because high-score strata were over-sampled to find positives. Such "thin" strata are reported in `warnings`; `failOnThinStrata` turns the warning into infeasibility | |
-| `designPrecisionThreshold` | A precision threshold from a stratified sample: the loosest of a fixed, strictest-first candidate list whose precision lower bound reaches the target. `linearised`, or `exact` (rarely feasible: it must allow for unseen false positives in every stratum) | |
-| `coxTest` | Cox's recalibration test: y ~ a + b·logit p, likelihood-ratio test of a = 0, b = 1 (weights rescaled to their Kish size). `converged` is false under separation, when the p-value means nothing | scikit-learn's unpenalised `LogisticRegression` |
-| `exceedanceTest` | Exact binomial test that a live share of scores at or above a threshold exceeds a bound | scipy |
-| `clopperPearsonLower`, `normalQuantile`, `seededRandom` | Exact binomial lower bound; standard normal quantile; a seeded PRNG | |
-
-```ts
-import { fitLogistic, decisionFunction, fitPlatt, predictPlatt, prevalenceWeights } from '@liquidau/solvers';
-
-const model = fitLogistic(Xtrain, ytrain, { C: 1, classWeight: 'balanced' });
-const logits = Xcal.map((x) => decisionFunction(model, x));
-// Calibrate to the class balance you expect in production, not the enriched training mix.
-const platt = fitPlatt(logits, ycal, prevalenceWeights(ycal, 0.01));
-const p = predictPlatt(platt, decisionFunction(model, x));
+```
+scores ──► fit ──────────► calibrate ──────► threshold ───────► check
+           fitLogistic     fitPlatt          conformal*         coxTest
+                           fitIsotonic       designRisk*        exceedanceTest
+                                             designPrecision*   wilson, clopperPearson*
 ```
 
-## Why exact solvers
+Used by [`@liquidau/rule-miner`](https://www.npmjs.com/package/@liquidau/rule-miner) (rule bounds)
+and [`@liquidau/embedding-classifier`](https://www.npmjs.com/package/@liquidau/embedding-classifier)
+(training, thresholds, gates).
 
-The L2 logistic objective is strictly convex, so it has exactly one optimum. Any correct solver
-reaches the same coefficients, which makes the results checkable against a reference
-implementation. Newton's method converges to that optimum in a handful of iterations; first-order
-solvers often stop short.
+## Install
 
-## Verification
+```bash
+npm install @liquidau/solvers
+```
 
-`npm test` checks every solver against `test/fixtures/sklearn-golden.json`, which scikit-learn's
-exact `newton-cholesky` solver generates (`scripts/make_golden.py`). The fixture covers
-class-balanced, sample-weighted, strongly regularised and balanced-plus-weighted cases, plus an
-isotonic fit with zero-weight samples. The
-tolerances are:
+## Example
 
-- coefficients: below 1e-6
-- probabilities: below 1e-8
-- isotonic thresholds and predictions: below 1e-12
+```ts
+import { decisionFunction, fitLogistic, fitPlatt, predictPlatt, prevalenceWeights, seededRandom } from '@liquidau/solvers';
 
-`test/fixtures/survey-golden.json` (`scripts/make_survey_golden.py`) checks the design-based
-estimators against samplics' `TaylorEstimator`: totals, ratios and their linearised standard errors
-match to 1e-8. Note that samplics' `fpc` argument is the multiplier 1 − n/N, not the sampling
-fraction. `designRiskThreshold`'s coverage is checked by simulation over 500 designs. In a population
-where 13% of positives sit in a low-score stratum that holds 1% of traffic, a 200-item sample of that
-stratum makes `exact` infeasible, which is the honest answer. `linearised` exceeds α in 20% of runs at
-δ = 5%. When that stratum is oversampled, both hold.
+// Toy data: two features, positives shifted up. Use your embeddings and labels instead.
+const rand = seededRandom(1);
+const make = (n: number) => Array.from({ length: n }, () => { const y = rand() < 0.3 ? 1 : 0; return { x: [rand() + y, rand() + y], y }; });
+const train = make(400), cal = make(200);
 
-`test/fixtures/drift-golden.json` and `test/fixtures/calibration-golden.json` check `exceedanceTest`
-against scipy and Cox's test against scikit-learn (coefficients to 1e-6, p-values to 1e-8).
+const model = fitLogistic(train.map((d) => d.x), train.map((d) => d.y), { C: 1, classWeight: 'balanced' });
+const logits = cal.map((d) => decisionFunction(model, d.x));
+// Calibrate to the prevalence expected in production (1%), not the training mix.
+const platt = fitPlatt(logits, cal.map((d) => d.y), prevalenceWeights(cal.map((d) => d.y), 0.01));
+console.log(predictPlatt(platt, decisionFunction(model, [1.2, 1.1]))); // calibrated probability
+```
 
-`test/fixtures/conformal-golden.json` (`scripts/make_conformal_golden.py`) checks the conformal
-thresholds against MAPIE and crepes. They match exactly, and every MAPIE p-value is reproduced to
-1e-8. One known MAPIE difference: its built-in `recall` risk computes 1 − recall in floating point and
-rounds the miss count up, which can count one miss too many (150 × (1 − 149/150) =
-1.0000000000000064). In 3 of the 8 cases it lands one rank stricter than the exact test. The
-fixture therefore states recall as a miss rate, and records the built-in result for comparison.
+## What's in it
 
-At 3,000 examples × 768 features, a fit takes about 6 s over 7 Newton iterations (Apple Silicon,
-Node 20); at 616 × 768, about 2 s. X is copied once into a contiguous typed array, the Hessian is
-accumulated four samples per pass, and the Cholesky factorisation runs in place.
+| Area | Exports |
+|---|---|
+| Logistic regression | `fitLogistic`, `decisionFunction`, `sigmoid` |
+| Calibration | `fitPlatt`, `fitIsotonic`, `prevalenceWeights`, `coxTest`, `ece` |
+| Bounds | `wilson`, `clopperPearsonUpper`, `clopperPearsonLower`, `binomialCdf` |
+| Conformal thresholds | `conformalLowerThreshold`, `conformalUpperThreshold`, `minimumSamples` |
+| Stratified samples | `htTotal`, `stratifiedRatio`, `stratifiedBootstrap`, `kishEffectiveN` |
+| Design thresholds | `designRiskThreshold`, `designPrecisionThreshold` |
+| Monitoring, agreement | `exceedanceTest`, `cohenKappa` |
 
-`classWeight: 'balanced'` uses sample-weighted class totals, as current scikit-learn does.
+Every export is listed in [docs/API.md](docs/API.md).
 
-`fitLogistic` returns `converged: true` only when the Newton-decrement stopping test passed. It is
-`false` if the fit hit `maxIter` or the line search stalled first.
+## Guarantees and limits
 
-## Differences from scikit-learn
+- Logistic coefficients match scikit-learn to 1e-6, probabilities to 1e-8.
+- Conformal thresholds match MAPIE and crepes exactly.
+- Binary only, L2 only, dense features.
+- About 6 s to fit 3,000 × 768 on a laptop; cost grows with features squared.
+- **Design thresholds:** `linearised` bounds can under-cover with thin strata, so `exact` is the default.
 
-- **Sample weights.** Negative or non-finite weights throw, as do weights that are all zero.
-  scikit-learn's isotonic regression silently drops negative weights, and its logistic regression
-  accepts them. Zero weights are dropped from isotonic fits, as in scikit-learn.
-- **Platt scaling.** `fitPlatt` fits hard 0/1 targets with a tiny L2 penalty (`C = 1e6`).
-  `CalibratedClassifierCV(method="sigmoid")` uses Platt's smoothed targets and no penalty, so its
-  coefficients differ slightly.
-- **ECE bins.** Bins are closed on the left, as `np.digitize` does, so 0.5 falls in `0.5-0.6`.
-  `calibration_curve` closes them on the right and puts 0.5 in `0.4-0.5`. Edges follow `linspace`
-  arithmetic, so 0.3 falls in `0.2-0.3` because the computed edge is 0.30000000000000004.
-- **Cohen's kappa.** When both raters use one identical label throughout, `cohenKappa` returns 1.
-  `cohen_kappa_score` returns NaN.
+## More
 
-## Limits
-
-- Binary only (use one-vs-rest for multi-label), L2 only, dense features.
-- Each Newton step costs O(n·d²) + O(d³). That is fine up to a few thousand features.
+- [docs/API.md](docs/API.md): every export, and why the solvers are exact.
+- [docs/VERIFICATION.md](docs/VERIFICATION.md): golden fixtures, tolerances, simulations, timing.
+- [docs/SKLEARN-DIFFERENCES.md](docs/SKLEARN-DIFFERENCES.md): where results differ from scikit-learn, and why.
 
 ## Develop
 
 ```bash
-npm install          # TypeScript, tsx and @types/node are devDependencies
-npm test             # runs the .ts tests through tsx, so Node 20 works
-npm run typecheck
-npm run build        # dist/ (ESM + .d.ts)
-
-# Regenerating the golden fixtures needs Python (development only):
-python3 -m venv .venv && .venv/bin/pip install numpy scikit-learn mapie crepes samplics
-.venv/bin/python scripts/make_golden.py
-.venv/bin/python scripts/make_conformal_golden.py
-.venv/bin/python scripts/make_survey_golden.py
-.venv/bin/python scripts/make_drift_golden.py
-.venv/bin/python scripts/make_calibration_golden.py   # needs scikit-learn
+npm install
+npm test        # runs the .ts tests through tsx, so Node 20 works
+npm run build   # dist/ (ESM + .d.ts)
 ```
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
-
-The isotonic regression in `src/isotonic.ts` is ported from scikit-learn and keeps its
-BSD-3-Clause notice in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+MIT. See [LICENSE](LICENSE). The isotonic regression in `src/isotonic.ts` is ported from
+scikit-learn and keeps its BSD-3-Clause notice in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
