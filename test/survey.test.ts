@@ -200,3 +200,36 @@ test('designRiskThreshold: infeasible with too few positives, refuses positives-
   assert.equal(exact.feasible ? exact.guarantee : null, 'design-exact');
   if (exact.feasible && lin.feasible) assert.ok(exact.threshold <= lin.threshold, 'exact is the more conservative');
 });
+
+test('designPrecisionThreshold: holds the target where a misspecified calibrator does not', async () => {
+  const { fitPlatt, predictPlatt, designPrecisionThreshold } = await import('../src/index.ts');
+  const gauss = (rand: () => number) => Math.sqrt(-2 * Math.log(rand() + 1e-300)) * Math.cos(2 * Math.PI * rand());
+  // 5% positives; 1% of negatives are hard negatives scoring high, so a logistic calibrator is misspecified.
+  const rand0 = seededRandom(3);
+  const y0: number[] = [], z0: number[] = [];
+  for (let i = 0; i < 60000; i++) { const pos = rand0() < 0.05; y0.push(+pos); z0.push(pos ? 1.5 + gauss(rand0) : rand0() < 0.01 ? 2.0 + 0.5 * gauss(rand0) : -1 + gauss(rand0)); }
+  const order = z0.map((_, i) => i).sort((a, b) => z0[b] - z0[a]);
+  const by: Record<string, number[]> = { top: [], mid: [], low: [] };
+  order.forEach((i, r) => by[r < 3000 ? 'top' : r < 12000 ? 'mid' : 'low'].push(i));
+  const precisionOf = (fire: (i: number) => boolean) => { let tp = 0, f = 0; for (let i = 0; i < y0.length; i++) if (fire(i)) { f++; tp += y0[i]; } return tp / f; };
+  const rand = seededRandom(9);
+  const runs = 150, target = 0.8;
+  let heuristicFails = 0, designFails = 0, designFeasible = 0;
+  for (let r = 0; r < runs; r++) {
+    const train = Array.from({ length: 3000 }, () => z0[Math.floor(rand() * z0.length)]).sort((a, b) => b - a);
+    const candidates = [...new Set(Array.from({ length: 150 }, (_, k) => train[29 + Math.floor((k * 2970) / 150)]))].sort((a, b) => b - a);
+    const n: Record<string, number> = { top: 1200, mid: 600, low: 400 };
+    const idx: number[] = [], strata: string[] = [], pis: number[] = [], sizes: Record<string, number> = {};
+    for (const [b, m] of Object.entries(by)) { sizes[b] = m.length; const pool = [...m]; for (let k = 0; k < n[b]; k++) { const j = k + Math.floor(rand() * (pool.length - k)); [pool[k], pool[j]] = [pool[j], pool[k]]; idx.push(pool[k]); strata.push(b); pis.push(n[b] / m.length); } }
+    const y = idx.map((i) => y0[i]), zs = idx.map((i) => z0[i]);
+    const platt = fitPlatt(zs, y, pis.map((p) => 1 / p));
+    if (!(precisionOf((i) => predictPlatt(platt, z0[i]) >= target) >= target)) heuristicFails++;
+    const res = designPrecisionThreshold({ inclusionProbs: pis, strata, stratumSizes: sizes, y, scores: zs, candidates, targetPrecision: target, delta: 0.05, method: 'linearised' });
+    if (res.feasible) { designFeasible++; if (!(precisionOf((i) => z0[i] >= res.threshold) >= target)) designFails++; }
+  }
+  assert.ok(heuristicFails > 0.9 * runs, `heuristic missed the target in ${heuristicFails}/${runs}`);
+  assert.ok(designFails <= 0.05 * runs + 3 * Math.sqrt(runs * 0.0475), `design: ${designFails} failures (${designFeasible} feasible)`);
+  const base = { inclusionProbs: [0.5, 0.5, 0.5, 0.5], strata: ['a', 'a', 'a', 'a'], stratumSizes: { a: 8 }, y: [1, 1, 0, 0], scores: [0.9, 0.8, 0.1, 0.2], targetPrecision: 0.5, delta: 0.05 };
+  assert.throws(() => designPrecisionThreshold({ ...base, candidates: [0.5, 0.7] }), /strictly decreasing/);
+  assert.match((designPrecisionThreshold({ ...base, candidates: [0.95, 0.5] }) as { reason: string }).reason, /no calibration unit scores at or above the strictest candidate/);
+});

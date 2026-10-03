@@ -357,3 +357,78 @@ export function designRiskThreshold(options: StratifiedDesign & {
   }
   return { feasible: true, threshold: best!.t, missRateEstimate: best!.R, missRateUpper: best!.upper, nEff, guarantee: method === 'exact' ? 'design-exact' : 'design-approximate', method, warnings };
 }
+
+export type DesignPrecisionResult =
+  | { feasible: true; threshold: number; precisionEstimate: number; precisionLower: number; firedEffective: number; guarantee: 'design-exact' | 'design-approximate'; method: 'exact' | 'linearised' }
+  | { feasible: false; reason: string };
+
+/**
+ * A precision threshold (act at score >= t) from a stratified sample: the loosest candidate whose
+ * precision - true positives over fired, a ratio of totals that the design weights put at
+ * production prevalence - has a lower bound >= targetPrecision.
+ *
+ * `candidates` must be fixed BEFORE looking at the calibration sample (e.g. from training-split
+ * scores) and ordered strictest first; they are tested in that order and the scan stops at the
+ * first failure (fixed-sequence testing: valid without monotonicity, which precision lacks).
+ *
+ *   exact (default)  per-stratum Clopper-Pearson: TP_L = Σ N_h·CP_lower(tp_h), FP_U = Σ N_h·CP_upper(fp_h),
+ *                    Bonferroni over 2·H, bound TP_L / (TP_L + FP_U); census strata use their counts
+ *   linearised       P̂ - z_{1-δ}·se, capped by an exact Clopper-Pearson bound at the Kish effective
+ *                    number of fired units. Approximate.
+ */
+export function designPrecisionThreshold(options: StratifiedDesign & {
+  y: ArrayLike<number>;
+  scores: ArrayLike<number>;
+  candidates: readonly number[];
+  targetPrecision: number;
+  delta: number;
+  method?: 'exact' | 'linearised';
+}): DesignPrecisionResult {
+  const { y, scores, candidates, targetPrecision, delta, method = 'exact' } = options;
+  if (!(targetPrecision > 0 && targetPrecision < 1)) throw new Error(`targetPrecision must be strictly between 0 and 1, got ${targetPrecision}`);
+  if (!(delta > 0 && delta < 1)) throw new Error(`delta must be strictly between 0 and 1, got ${delta}`);
+  if (!candidates.length) throw new Error('candidates must not be empty');
+  for (let k = 1; k < candidates.length; k++) if (!(candidates[k] < candidates[k - 1])) throw new Error('candidates must be strictly decreasing (strictest first)');
+  checkLengths(y.length, { scores });
+  checkFinite('scores', scores);
+  for (let i = 0; i < y.length; i++) if (y[i] !== 0 && y[i] !== 1) throw new Error(`y[${i}] must be 0 or 1`);
+  const strata = strataOf(options, y.length);
+  for (const s of strata) if (s.idx.length < 2) throw new Error(`stratum ${s.name} has ${s.idx.length} sampled unit(s); variance needs at least 2`);
+  const conf = 1 - delta / (2 * strata.length);
+  const z = normalQuantile(1 - delta);
+
+  const bound = (t: number): { P: number; lower: number; nEff: number } | null => {
+    const fired = Array.from(scores, (s) => (s >= t ? 1 : 0));
+    if (!fired.some(Boolean)) return null;
+    const tp = Array.from(y, (v, i) => v * fired[i]);
+    const w = Array.from(y, (_, i) => 1 / options.inclusionProbs[i]);
+    const nEff = kishEffectiveN(w.filter((_, i) => fired[i]));
+    const P = stratifiedRatio({ ...options, num: tp, den: fired }).estimate;
+    if (method === 'exact') {
+      let TPL = 0, FPU = 0;
+      for (const s of strata) {
+        const n = s.idx.length;
+        const a = s.idx.filter((i) => tp[i]).length, f = s.idx.filter((i) => fired[i] && !y[i]).length;
+        if (n === s.N) { TPL += a; FPU += f; continue; }
+        TPL += s.N * clopperPearsonLower(a, n, conf);
+        FPU += s.N * clopperPearsonUpper(f, n, conf);
+      }
+      return { P, lower: TPL + FPU === 0 ? 0 : TPL / (TPL + FPU), nEff };
+    }
+    const se = stratifiedRatio({ ...options, num: tp, den: fired }).se;
+    const nf = Math.floor(nEff);
+    const exactCap = nf >= 1 ? clopperPearsonLower(Math.min(nf, Math.floor(P * nEff + 1e-9)), nf, 1 - delta) : 0;
+    return { P, lower: Math.min(P - z * se, exactCap), nEff };
+  };
+
+  let best: { t: number; P: number; lower: number; nEff: number } | null = null;
+  for (const t of candidates) {
+    const b = bound(t);
+    if (!b || b.lower < targetPrecision) {
+      if (!best) return { feasible: false, reason: b ? `the precision lower bound is ${b.lower.toFixed(4)} < ${targetPrecision} even at the strictest candidate ${t} (${b.nEff.toFixed(1)} effective fired)` : `no calibration unit scores at or above the strictest candidate ${t}` };
+      break;
+    }
+    best = { t, ...b };
+  }
+  return { feasible: true, threshold: best!.t, precisionEstimate: best!.P, precisionLower: best!.lower, firedEffective: best!.nEff, guarantee: method === 'exact' ? 'design-exact' : 'design-approximate', method };
+}

@@ -18,6 +18,9 @@ calibrate and evaluate them. One runtime dependency: [`ml-matrix`](https://githu
 | `nextUp` | The next double above a value, so `score >= nextUp(v)` excludes `v` | |
 | `htTotal`, `stratifiedRatio`, `stratifiedBootstrap`, `kishEffectiveN`, `weightedQuantile` | Design-based estimation for stratified simple random samples: Horvitz–Thompson totals, ratios with linearised variance and finite-population correction, Rao–Wu bootstrap replicate weights, Kish effective size, weighted quantiles | samplics `TaylorEstimator` (totals, ratios, standard errors) |
 | `designRiskThreshold` | A recall threshold from a stratified sample whose miss rate is ≤ α with probability 1 − δ. `exact` (default): per-stratum Clopper–Pearson bounds, valid but conservative with many strata. `linearised` / `bootstrap`: approximate. They under-cover when a heavily weighted stratum yields few sampled positives, typically because high-score strata were over-sampled to find positives. Such "thin" strata are reported in `warnings`; `failOnThinStrata` turns the warning into infeasibility | |
+| `designPrecisionThreshold` | A precision threshold from a stratified sample: the loosest of a fixed, strictest-first candidate list whose precision lower bound reaches the target. `linearised`, or `exact` (rarely feasible: it must allow for unseen false positives in every stratum) | |
+| `coxTest` | Cox's recalibration test: y ~ a + b·logit p, likelihood-ratio test of a = 0, b = 1 (weights rescaled to their Kish size) | scikit-learn's unpenalised `LogisticRegression` |
+| `exceedanceTest` | Exact binomial test that a live share of scores at or above a threshold exceeds a bound | scipy |
 | `clopperPearsonLower`, `normalQuantile`, `seededRandom` | Exact binomial lower bound; standard normal quantile; a seeded PRNG | |
 
 ```ts
@@ -56,6 +59,9 @@ fraction. `designRiskThreshold`'s coverage is checked by simulation over 500 des
 where 13% of positives sit in a low-score stratum that holds 1% of traffic, a 200-item sample of that
 stratum makes `exact` infeasible, which is the honest answer. `linearised` exceeds α in 20% of runs at
 δ = 5%. When that stratum is oversampled, both hold.
+
+`test/fixtures/drift-golden.json` and `test/fixtures/calibration-golden.json` check `exceedanceTest`
+against scipy and Cox's test against scikit-learn (coefficients to 1e-6, p-values to 1e-8).
 
 `test/fixtures/conformal-golden.json` (`scripts/make_conformal_golden.py`) checks the conformal
 thresholds against MAPIE and crepes. They match exactly, and every MAPIE p-value is reproduced to
@@ -104,6 +110,8 @@ python3 -m venv .venv && .venv/bin/pip install numpy scikit-learn mapie crepes s
 .venv/bin/python scripts/make_golden.py
 .venv/bin/python scripts/make_conformal_golden.py
 .venv/bin/python scripts/make_survey_golden.py
+.venv/bin/python scripts/make_drift_golden.py
+.venv/bin/python scripts/make_calibration_golden.py   # needs scikit-learn
 ```
 
 ## License
