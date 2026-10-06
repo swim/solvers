@@ -53,6 +53,7 @@ for (const c of golden.logistic) {
 test('Platt scaling (prevalence-weighted) matches scikit-learn', () => {
   const p = golden.platt;
   const platt = fitPlatt(p.logits, p.y, p.sample_weight);
+  assert.equal(platt.converged, true, 'fitPlatt reports convergence');
   assert.ok(Math.abs(platt.a - p.a) < COEF_TOL, `a differs: ${platt.a} vs ${p.a}`);
   assert.ok(Math.abs(platt.c - p.c) < COEF_TOL, `c differs: ${platt.c} vs ${p.c}`);
 });

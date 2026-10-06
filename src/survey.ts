@@ -72,8 +72,39 @@ function strataOf({ inclusionProbs, strata, stratumSizes }: StratifiedDesign, n:
   });
 }
 
+/**
+ * Collapsed strata (FINDINGS O6): a non-census stratum with one sampled unit has no within-stratum
+ * variance, so it borrows one. Its partner is the sampled stratum with the closest sampling weight
+ * N/n (ties: the larger n, then the name); the singleton's s² is the sample variance of its own unit
+ * and the partner's units together, so a difference between the two strata counts as variance
+ * (conservative). Throws when no stratum has two or more units to pool with.
+ */
+function partners(strata: readonly Stratum[]): Map<string, Stratum> {
+  const out = new Map<string, Stratum>();
+  const pool = strata.filter((s) => s.idx.length >= 2);
+  for (const s of strata) {
+    if (s.idx.length !== 1 || s.N === 1) continue; // a census singleton contributes no variance
+    if (!pool.length) throw new Error(`stratum ${s.name} has 1 sampled unit and no other stratum has 2 or more to pool its variance with`);
+    const w = s.N / s.idx.length;
+    const best = [...pool].sort((a, b) => Math.abs(a.N / a.idx.length - w) - Math.abs(b.N / b.idx.length - w) || b.idx.length - a.idx.length || (a.name < b.name ? -1 : 1))[0];
+    out.set(s.name, best);
+  }
+  return out;
+}
+
+/** Sample variance (n - 1 denominator) of values; 0 for fewer than two. */
+function sampleVariance(values: readonly number[]): number {
+  if (values.length < 2) return 0;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  return values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / (values.length - 1);
+}
+
 /** Linearised (Taylor) estimate of a ratio of totals, R̂ = Â / B̂, under stratified SRS without replacement. */
-export function stratifiedRatio(options: StratifiedDesign & { num: ArrayLike<number>; den: ArrayLike<number> }): { estimate: number; variance: number; se: number } {
+export function stratifiedRatio(options: StratifiedDesign & { num: ArrayLike<number>; den: ArrayLike<number> }): {
+  estimate: number; variance: number; se: number;
+  /** Single-unit strata whose variance was pooled with a partner stratum (collapsed strata). */
+  collapsed: Array<{ stratum: string; with: string }>;
+} {
   const { num, den } = options;
   checkLengths(num.length, { den });
   checkFinite('num', num);
@@ -86,18 +117,18 @@ export function stratifiedRatio(options: StratifiedDesign & { num: ArrayLike<num
   }
   if (B === 0) throw new Error('the denominator total is 0 - the ratio is undefined');
   const R = A / B;
+  const pair = partners(strata);
+  const zOf = (i: number) => (num[i] - R * den[i]) / B;
   let variance = 0;
   for (const s of strata) {
     const nh = s.idx.length;
-    if (nh < 2) throw new Error(`stratum ${s.name} has ${nh} sampled unit(s); variance needs at least 2`);
     const fh = nh / s.N;
     if (fh === 1) continue; // a census stratum contributes no sampling variance
-    const z = s.idx.map((i) => (num[i] - R * den[i]) / B);
-    const mean = z.reduce((a, b) => a + b, 0) / nh;
-    const s2 = z.reduce((acc, v) => acc + (v - mean) ** 2, 0) / (nh - 1);
+    const partner = pair.get(s.name);
+    const s2 = sampleVariance((partner ? [...s.idx, ...partner.idx] : s.idx).map(zOf));
     variance += (s.N * s.N * (1 - fh) * s2) / nh;
   }
-  return { estimate: R, variance, se: Math.sqrt(variance) };
+  return { estimate: R, variance, se: Math.sqrt(variance), collapsed: [...pair].map(([stratum, p]) => ({ stratum, with: p.name })) };
 }
 
 /** Deterministic 32-bit PRNG (mulberry32): uniform in [0, 1). */
@@ -257,13 +288,16 @@ export function designRiskThreshold(options: StratifiedDesign & {
   let hasNegative = false;
   for (let i = 0; i < y.length; i++) if (y[i] === 0) hasNegative = true;
   if (!hasNegative) throw new Error('designRiskThreshold needs every sampled calibration unit, not only positives: the miss-rate variance is a domain estimate over all of them');
-  for (const s of strata) if (s.idx.length < 2) throw new Error(`stratum ${s.name} has ${s.idx.length} sampled unit(s); variance needs at least 2`);
+  // Exact needs no variance; linearised pools a single-unit stratum with a partner (collapsed
+  // strata); the Rao-Wu bootstrap can't resample a one-unit stratum.
+  const pair = method === 'linearised' ? partners(strata) : new Map<string, Stratum>();
+  if (method === 'bootstrap') for (const s of strata) if (s.idx.length < 2) throw new Error(`stratum ${s.name} has ${s.idx.length} sampled unit(s); the bootstrap needs at least 2 (method 'linearised' pools it with a partner stratum)`);
 
   const w = Array.from(y, (_, i) => 1 / options.inclusionProbs[i]);
   const positives = Array.from(y, (_, i) => i).filter((i) => y[i] === 1).sort((a, b) => scores[a] - scores[b]);
   const nEff = kishEffectiveN(positives.map((i) => w[i]));
   if (positives.length === 0) return { feasible: false, reason: 'no calibration positives', nEff: 0 };
-  const warnings: string[] = [];
+  const warnings: string[] = [...pair].map(([st, p]) => `stratum ${st} has 1 sampled unit: its variance was pooled with stratum ${p.name} (collapsed strata)`);
   if (method !== 'exact' && minStratumPositives > 0) {
     // Estimated positives overall, and an exact upper bound on how many a thin stratum could hold.
     const positivesTotal = strata.reduce((acc, st) => acc + (st.N / st.idx.length) * st.idx.filter((i) => y[i] === 1).length, 0);
@@ -321,14 +355,18 @@ export function designRiskThreshold(options: StratifiedDesign & {
       analytic = weightedQuantile(rs, rs.map(() => 1), 1 - delta);
     } else {
       let variance = 0;
+      // z_i: (1 - R)/B for a missed positive, -R/B for a caught one, 0 for a negative. Per stratum
+      // from counts; a single-unit stratum's s² is pooled over its units and its partner's.
+      const moments = (h: number) => ({ n: strata[h].idx.length, sum: (miss[h] * (1 - R) - (pos[h] - miss[h]) * R) / B, sumSq: (miss[h] * (1 - R) ** 2 + (pos[h] - miss[h]) * R * R) / (B * B) });
+      const hIndex = new Map(strata.map((s, h) => [s.name, h]));
       strata.forEach((s, h) => {
         const nh = s.idx.length;
         const fh = nh / s.N;
         if (fh === 1) return;
-        // z_i: (1 - R)/B for a missed positive, -R/B for a caught one, 0 for a negative.
-        const sum = (miss[h] * (1 - R) - (pos[h] - miss[h]) * R) / B;
-        const sumSq = (miss[h] * (1 - R) ** 2 + (pos[h] - miss[h]) * R * R) / (B * B);
-        const s2 = (sumSq - (sum * sum) / nh) / (nh - 1);
+        const partner = pair.get(s.name);
+        const m = moments(h), q = partner ? moments(hIndex.get(partner.name)!) : null;
+        const n = m.n + (q?.n ?? 0), sum = m.sum + (q?.sum ?? 0), sumSq = m.sumSq + (q?.sumSq ?? 0);
+        const s2 = n >= 2 ? (sumSq - (sum * sum) / n) / (n - 1) : 0;
         variance += (s.N * s.N * (1 - fh) * Math.max(0, s2)) / nh;
       });
       analytic = R + z * Math.sqrt(variance);
@@ -359,7 +397,7 @@ export function designRiskThreshold(options: StratifiedDesign & {
 }
 
 export type DesignPrecisionResult =
-  | { feasible: true; threshold: number; precisionEstimate: number; precisionLower: number; firedEffective: number; guarantee: 'design-exact' | 'design-approximate'; method: 'exact' | 'linearised' }
+  | { feasible: true; threshold: number; precisionEstimate: number; precisionLower: number; firedEffective: number; guarantee: 'design-exact' | 'design-approximate'; method: 'exact' | 'linearised'; warnings: string[] }
   | { feasible: false; reason: string };
 
 /**
@@ -393,7 +431,8 @@ export function designPrecisionThreshold(options: StratifiedDesign & {
   checkFinite('scores', scores);
   for (let i = 0; i < y.length; i++) if (y[i] !== 0 && y[i] !== 1) throw new Error(`y[${i}] must be 0 or 1`);
   const strata = strataOf(options, y.length);
-  for (const s of strata) if (s.idx.length < 2) throw new Error(`stratum ${s.name} has ${s.idx.length} sampled unit(s); variance needs at least 2`);
+  // Exact needs no variance; linearised pools a single-unit stratum with a partner (collapsed strata).
+  const collapsed = method === 'linearised' ? [...partners(strata)].map(([st, p]) => `stratum ${st} has 1 sampled unit: its variance was pooled with stratum ${p.name} (collapsed strata)`) : [];
   const conf = 1 - delta / (2 * strata.length);
   const z = normalQuantile(1 - delta);
 
@@ -403,7 +442,10 @@ export function designPrecisionThreshold(options: StratifiedDesign & {
     const tp = Array.from(y, (v, i) => v * fired[i]);
     const w = Array.from(y, (_, i) => 1 / options.inclusionProbs[i]);
     const nEff = kishEffectiveN(w.filter((_, i) => fired[i]));
-    const P = stratifiedRatio({ ...options, num: tp, den: fired }).estimate;
+    // Horvitz-Thompson ratio directly: the exact path needs no variance (so no two-unit strata).
+    let num = 0, den = 0;
+    for (let i = 0; i < y.length; i++) { num += tp[i] * w[i]; den += fired[i] * w[i]; }
+    const P = num / den;
     if (method === 'exact') {
       let TPL = 0, FPU = 0;
       for (const s of strata) {
@@ -430,5 +472,5 @@ export function designPrecisionThreshold(options: StratifiedDesign & {
     }
     best = { t, ...b };
   }
-  return { feasible: true, threshold: best!.t, precisionEstimate: best!.P, precisionLower: best!.lower, firedEffective: best!.nEff, guarantee: method === 'exact' ? 'design-exact' : 'design-approximate', method };
+  return { feasible: true, threshold: best!.t, precisionEstimate: best!.P, precisionLower: best!.lower, firedEffective: best!.nEff, guarantee: method === 'exact' ? 'design-exact' : 'design-approximate', method, warnings: method === 'linearised' ? collapsed : [] };
 }

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  designPrecisionThreshold,
   designRiskThreshold,
   htTotal,
   kishEffectiveN,
@@ -45,7 +46,6 @@ test('estimators validate their inputs', () => {
   assert.throws(() => htTotal([1], [0]), /must be in \(0, 1\]/);
   assert.throws(() => htTotal([NaN], [0.5]), /not finite/);
   const design = { inclusionProbs: [0.1, 0.1, 0.2], strata: ['a', 'a', 'b'], stratumSizes: { a: 20, b: 5 } };
-  assert.throws(() => stratifiedRatio({ ...design, num: [1, 0, 1], den: [1, 1, 1] }), /stratum b has 1 sampled unit/);
   assert.throws(() => stratifiedRatio({ ...design, inclusionProbs: [0.1, 0.2, 0.2], num: [1, 0, 1], den: [1, 1, 1] }), /stratified simple random sampling only/);
   assert.throws(() => stratifiedRatio({ inclusionProbs: [0.5, 0.5], strata: ['a', 'a'], stratumSizes: { a: 4 }, num: [1, 1], den: [0, 0] }), /denominator total is 0/);
 });
@@ -232,4 +232,45 @@ test('designPrecisionThreshold: holds the target where a misspecified calibrator
   const base = { inclusionProbs: [0.5, 0.5, 0.5, 0.5], strata: ['a', 'a', 'a', 'a'], stratumSizes: { a: 8 }, y: [1, 1, 0, 0], scores: [0.9, 0.8, 0.1, 0.2], targetPrecision: 0.5, delta: 0.05 };
   assert.throws(() => designPrecisionThreshold({ ...base, candidates: [0.5, 0.7] }), /strictly decreasing/);
   assert.match((designPrecisionThreshold({ ...base, candidates: [0.95, 0.5] }) as { reason: string }).reason, /no calibration unit scores at or above the strictest candidate/);
+});
+
+test('a single-unit stratum pools its variance with a partner (collapsed strata, FINDINGS O6)', () => {
+  // a: 2 units of 20 (weight 10); b: 1 unit of 5 (weight 5). R = 15 / 25 = 0.6.
+  // z = (num - R·den) / B: a -> 0.016, -0.024; b -> 0.016.
+  // a: s² = 0.0008, contribution 20² · 0.9 · 0.0008 / 2 = 0.144.
+  // b (pooled with a): s² of [0.016, 0.016, -0.024] = 0.000533..., contribution 5² · 0.8 · s² / 1.
+  const design = { inclusionProbs: [0.1, 0.1, 0.2], strata: ['a', 'a', 'b'], stratumSizes: { a: 20, b: 5 } };
+  const r = stratifiedRatio({ ...design, num: [1, 0, 1], den: [1, 1, 1] });
+  const s2b = (2 * (0.016 - 0.008 / 3) ** 2 + (-0.024 - 0.008 / 3) ** 2) / 2;
+  assert.ok(Math.abs(r.estimate - 0.6) < 1e-12);
+  assert.ok(Math.abs(r.variance - (0.144 + 25 * 0.8 * s2b)) < 1e-12, `variance ${r.variance}`);
+  assert.deepEqual(r.collapsed, [{ stratum: 'b', with: 'a' }]);
+  // A census singleton (n = N = 1) contributes no variance and needs no partner.
+  const census = stratifiedRatio({ inclusionProbs: [0.1, 0.1, 1], strata: ['a', 'a', 'c'], stratumSizes: { a: 20, c: 1 }, num: [1, 0, 1], den: [1, 1, 1] });
+  assert.deepEqual(census.collapsed, []);
+  // No stratum with two units to pool with: a clear error.
+  assert.throws(() => stratifiedRatio({ inclusionProbs: [0.1, 0.2], strata: ['a', 'b'], stratumSizes: { a: 10, b: 5 }, num: [1, 0], den: [1, 1] }), /no other stratum has 2 or more/);
+  // The partner is the stratum with the closest sampling weight: b (weight 5) pools with c (weight 4), not a (weight 10).
+  const three = stratifiedRatio({ inclusionProbs: [0.1, 0.1, 0.2, 0.25, 0.25], strata: ['a', 'a', 'b', 'c', 'c'], stratumSizes: { a: 20, b: 5, c: 8 }, num: [1, 0, 1, 0, 1], den: [1, 1, 1, 1, 1] });
+  assert.deepEqual(three.collapsed, [{ stratum: 'b', with: 'c' }]);
+});
+
+test('threshold scans accept a single-unit stratum: exact needs no variance, linearised pools and warns', () => {
+  // Stratum b has one sampled unit (a negative); a holds the positives.
+  const n = 40;
+  const y = Array.from({ length: n }, (_, i) => (i % 3 === 0 ? 1 : 0)).concat([0]);
+  const scores = Array.from({ length: n }, (_, i) => (i % 3 === 0 ? 0.5 + i / 100 : i / 200)).concat([0.1]);
+  const design = { inclusionProbs: [...Array(n).fill(0.5), 0.1], strata: [...Array(n).fill('a'), 'b'], stratumSizes: { a: 80, b: 10 } };
+  // Exact runs (it used to throw) and is honestly conservative here: one sampled unit of 10 in b
+  // could hide several positives, so it reports infeasible with its bound, not an error.
+  const exact = designRiskThreshold({ ...design, y, scores, alpha: 0.5, delta: 0.05, method: 'exact' });
+  assert.ok(!exact.feasible && /miss-rate bound/.test(exact.reason), JSON.stringify(exact));
+  const lin = designRiskThreshold({ ...design, y, scores, alpha: 0.5, delta: 0.05, method: 'linearised', minStratumPositives: 0 });
+  assert.equal(lin.feasible, true);
+  assert.ok(lin.feasible && lin.warnings.some((w) => /stratum b has 1 sampled unit: its variance was pooled with stratum a/.test(w)));
+  assert.throws(() => designRiskThreshold({ ...design, y, scores, alpha: 0.5, delta: 0.05, method: 'bootstrap', minStratumPositives: 0 }), /the bootstrap needs at least 2/);
+  const prec = designPrecisionThreshold({ ...design, y, scores, candidates: [0.6, 0.5], targetPrecision: 0.3, delta: 0.05, method: 'linearised' });
+  assert.ok(prec.feasible && prec.warnings.some((w) => /pooled with stratum a/.test(w)), JSON.stringify(prec));
+  const precExact = designPrecisionThreshold({ ...design, y, scores, candidates: [0.6, 0.5], targetPrecision: 0.3, delta: 0.05, method: 'exact' });
+  assert.ok(precExact.feasible && precExact.warnings.length === 0, JSON.stringify(precExact));
 });
